@@ -102,8 +102,8 @@ LDFLAGS = -Wl,-Map=$(TARGET).map,--cref
 #AVRDUDE_PROGRAMMER = stk500v2
 AVRDUDE_PROGRAMMER = usbtiny
 
-
-AVRDUDE_PORT = com1	   # programmer connected to serial device
+AVRDUDE_PORT = /dev/ttyACM0
+#AVRDUDE_PORT = com1	   # programmer connected to serial device
 #AVRDUDE_PORT = /dev/cu.KeySerial1	   # programmer connected to serial device
 #AVRDUDE_PORT = /dev/cu.PL2303-0B2
 #AVRDUDE_PORT = lpt1	# programmer connected to parallel port
@@ -202,8 +202,8 @@ all: begin gccversion sizebefore $(TARGET).elf $(TARGET).hex $(TARGET).eep \
 
 full: $(TARGET).hex $(TARGET).eep
 	$(AVRDUDE) $(AVRDUDE_FLAGS) -u -U lfuse:w:0xE2:m -u -U hfuse:w:0xc6:m
-	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 1 -U flash:w:$< 
-	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 1 -U eeprom:w:iveep.hex
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 5 -U flash:w:$< 
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 5 -U eeprom:w:iveep.hex
 
 
 burn-fuse: 
@@ -268,7 +268,7 @@ extcoff: $(TARGET).elf
 
 # Program the device.  
 program: $(TARGET).hex $(TARGET).eep
-	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 1 -U flash:w:$< 
+	$(AVRDUDE) $(AVRDUDE_FLAGS) -B 5 -U flash:w:$< 
 
 
 # Create final output files (.hex, .eep) from ELF output file.

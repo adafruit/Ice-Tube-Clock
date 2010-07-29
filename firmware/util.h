@@ -1,6 +1,7 @@
 /***************************************************************************
- Ice Tube Clock firmware August 13, 2009
- (c) 2009 Limor Fried / Adafruit Industries
+ Ice Tube Clock with GPS firmware July 22, 2010
+ (c) 2010 Limor Fried / Adafruit Industries
+ GPS Capability added by Devlin Thyne
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -22,9 +23,11 @@ THE SOFTWARE.
 ****************************************************************************/
 
 #if (F_CPU == 16000000)
+#define BRRL_4800 207    // for 16MHZ
 #define BRRL_9600 103    // for 16MHZ
 #define BRRL_192 52    // for 16MHZ
 #elif (F_CPU == 8000000)
+#define BRRL_4800 103
 #define BRRL_9600 52
 #define BRRL_192 26    
 #endif
@@ -37,6 +40,9 @@ void delay_10us(uint8_t us);
 void delay_s(uint8_t s);
 
 int uart_putchar(char c);
+
+char uart_getchar(void);
+
 void uart_init(uint16_t BRR);
 
 
