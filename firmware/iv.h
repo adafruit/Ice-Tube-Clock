@@ -1,6 +1,7 @@
 /***************************************************************************
- Ice Tube Clock firmware August 13, 2009
- (c) 2009 Limor Fried / Adafruit Industries
+ Ice Tube Clock with GPS firmware July 22, 2010
+ (c) 2010 Limor Fried / Adafruit Industries
+ GPS Capability added by Devlin Thyne
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -27,6 +28,8 @@ THE SOFTWARE.
 #define DEBUG 1
 #define DEBUGP(x)  if (DEBUG) {putstring_nl(x);}
 
+//The year the clock was programmed, used for error checking
+#define PROGRAMMING_YEAR 10
 
 #define REGION_US 0
 #define REGION_EU 1
@@ -34,6 +37,9 @@ THE SOFTWARE.
 // date format
 #define DATE 0  // mm-dd-yy
 #define DAY 1   // thur jan 1
+
+// String buffer size:
+#define BUFFERSIZE 128
 
 #define DISPLAYSIZE 9
 
@@ -58,6 +64,8 @@ THE SOFTWARE.
 #define EE_VOLUME 10
 #define EE_REGION 11
 #define EE_SNOOZE 12
+#define EE_ZONE_HOUR 13
+#define EE_ZONE_MIN 14
 
 void delay(uint16_t delay);
 
@@ -73,6 +81,7 @@ void display_time(uint8_t h, uint8_t m, uint8_t s);
 void display_date(uint8_t style);
 void display_str(char *s);
 void display_alarm(uint8_t h, uint8_t m);
+void display_timezone(int8_t h, uint8_t m);
 
 void set_time(void);
 void set_alarm(void);
@@ -81,6 +90,15 @@ void set_brightness(void);
 void set_volume(void);
 void set_region(void);
 void set_snooze(void); // not activated by default
+
+//Checks the alarm against the passed time.
+void check_alarm(uint8_t h, uint8_t m, uint8_t s);
+
+//Fixes the time variables whenever time is changed
+void fix_time(void);
+
+//Set the time zone:
+void set_timezone(void);
 
 void beep(uint16_t freq, uint8_t times);
 void tick(void);
@@ -91,6 +109,12 @@ void setalarmstate(void);
 void setdisplay(uint8_t digit, uint8_t segments);
 void vfd_send(uint32_t d);
 void spi_xfer(uint8_t c);
+
+//GPS serial data handling functions:
+uint8_t gpsdataready(void);
+void getgpstime(void);
+void setgpstime(char* str);
+void setgpsdate(char* str);
 
 
 // displaymode
@@ -106,10 +130,11 @@ void spi_xfer(uint8_t c);
 #define SET_REGION 8
 #define SHOW_SNOOZE 9
 #define SET_SNOOZE 10
+#define SET_ZONE 11
 
 // sub-mode settings
 #define SHOW_MENU 0
-// alarm/time
+// alarm/time/zone
 #define SET_HOUR 1
 #define SET_MIN 2
 #define SET_SEC 3
@@ -123,6 +148,7 @@ void spi_xfer(uint8_t c);
 #define SET_VOL 1
 //region
 #define SET_REG 1
+
 
 #define BOOST PD6
 #define BOOST_DDR DDRD

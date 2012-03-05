@@ -1,6 +1,7 @@
 /***************************************************************************
- Ice Tube Clock firmware August 13, 2009
- (c) 2009 Limor Fried / Adafruit Industries
+ Ice Tube Clock with GPS firmware July 22, 2010
+ (c) 2010 Limor Fried / Adafruit Industries
+ GPS Capability added by Devlin Thyne
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -21,7 +22,6 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ****************************************************************************/
 
-
 #include <avr/io.h>      
 #include <string.h>
 #include <avr/interrupt.h>   // Interrupts and timers
@@ -29,6 +29,7 @@ THE SOFTWARE.
 #include <avr/pgmspace.h>    // So we can store the 'font table' in ROM
 #include <avr/eeprom.h>      // Date/time/pref backup in permanent EEPROM
 #include <avr/wdt.h>     // Watchdog timer to repair lockups
+#include <stdlib.h>
 
 #include "iv.h"
 #include "util.h"
@@ -37,9 +38,9 @@ THE SOFTWARE.
 uint8_t region = REGION_US;
 
 // These variables store the current time.
-volatile uint8_t time_s, time_m, time_h;
+volatile int8_t time_s, time_m, time_h;
 // ... and current date
-volatile uint8_t date_m, date_d, date_y;
+volatile int8_t date_m, date_d, date_y;
 
 // how loud is the speaker supposed to be?
 volatile uint8_t volume;
@@ -55,6 +56,15 @@ volatile uint8_t sleepmode = 0;
 
 volatile uint8_t timeunknown = 0;        // MEME
 volatile uint8_t restored = 0;
+
+// String buffer for processing GPS data:
+char strBuffer[BUFFERSIZE];
+uint8_t intBufferStatus = 0;
+
+// Variables for the timezone offset if using GPS.
+int8_t intTimeZoneHour = -6;  //Because Colorado is my time zone...
+uint8_t intTimeZoneMin = 0;
+
 
 // Our display buffer, which is updated to show the time/date/etc
 // and is multiplexed onto the tube
@@ -117,7 +127,9 @@ void setsnooze(void) {
 
 // we reset the watchdog timer 
 void kickthedog(void) {
+  
   wdt_reset();
+
 }
 
 // called @ (F_CPU/256) = ~30khz (31.25 khz)
@@ -288,57 +300,8 @@ SIGNAL (TIMER2_OVF_vect) {
 
   time_s++;             // one second has gone by
 
-  // a minute!
-  if (time_s >= 60) {
-    time_s = 0;
-    time_m++;
-  }
+  fix_time();
 
-  // an hour...
-  if (time_m >= 60) {
-    time_m = 0;
-    time_h++; 
-    // lets write the time to the EEPROM
-    eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
-    eeprom_write_byte((uint8_t *)EE_MIN, time_m);
-  }
-
-  // a day....
-  if (time_h >= 24) {
-    time_h = 0;
-    date_d++;
-    eeprom_write_byte((uint8_t *)EE_DAY, date_d);
-  }
-
-  /*
-  if (! sleepmode) {
-    uart_putw_dec(time_h);
-    uart_putchar(':');
-    uart_putw_dec(time_m);
-    uart_putchar(':');
-    uart_putw_dec(time_s);
-    putstring_nl("");
-  }
-  */
-
-  // a full month!
-  // we check the leapyear and date to verify when its time to roll over months
-  if ((date_d > 31) ||
-      ((date_d == 31) && ((date_m == 4)||(date_m == 6)||(date_m == 9)||(date_m == 11))) ||
-      ((date_d == 30) && (date_m == 2)) ||
-      ((date_d == 29) && (date_m == 2) && !leapyear(2000+date_y))) {
-    date_d = 1;
-    date_m++;
-    eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
-  }
-  
-  // HAPPY NEW YEAR!
-  if (date_m >= 13) {
-    date_y++;
-    date_m = 1;
-    eeprom_write_byte((uint8_t *)EE_YEAR, date_y);
-  }
-  
   // If we're in low power mode we should get out now since the display is off
   if (sleepmode)
     return;
@@ -356,11 +319,8 @@ SIGNAL (TIMER2_OVF_vect) {
       display[0] &= ~0x2;
     
   }
-  if (alarm_on && (alarm_h == time_h) && (alarm_m == time_m) && (time_s == 0)) {
-    DEBUGP("alarm on!");
-    alarming = 1;
-    snoozetimer = 0;
-  }
+
+  check_alarm(time_h, time_m, time_s);
 
   if (timeoutcounter)
     timeoutcounter--;
@@ -419,6 +379,8 @@ SIGNAL(SIG_COMPARATOR) {
     }
   }
 }
+
+
 /*********************** Main app **********/
 
 uint32_t t;
@@ -553,9 +515,14 @@ int main(void) {
   restored = 0;
 
   // setup uart
-  uart_init(BRRL_192);
+  uart_init(BRRL_4800);
+
   //DEBUGP("VFD Clock");
   DEBUGP("!");
+  uart_puts("\n\rHello World!\n\r");
+  uart_puts("\n\rBuffer size is:\t");
+  uart_putw_dec(BUFFERSIZE);
+  uart_puts("\n\r");
 
   //DEBUGP("turning on anacomp");
   // set up analog comparator
@@ -573,7 +540,7 @@ int main(void) {
   } else {
     // we aren't in low power mode so init stuff
 
-    // init io's
+    // init IOs
     initbuttons();
     
     VFDSWITCH_PORT &= ~_BV(VFDSWITCH);
@@ -592,6 +559,15 @@ int main(void) {
     DEBUGP("boost init");
     boost_init(eeprom_read_byte((uint8_t *)EE_BRIGHT));
     sei();
+
+    //Load and check the timezone information
+    intTimeZoneHour = eeprom_read_byte((uint8_t *)EE_ZONE_HOUR);
+    if ( ( 12 < intTimeZoneHour ) || ( -12 > intTimeZoneHour ) )
+      intTimeZoneHour = 0;
+
+    intTimeZoneMin = eeprom_read_byte((uint8_t *)EE_ZONE_MIN);
+    if ( ( 60 < intTimeZoneMin ) || ( 0 > intTimeZoneMin ) )
+      intTimeZoneMin = 0;
 
     region = eeprom_read_byte((uint8_t *)EE_REGION);
     
@@ -637,10 +613,18 @@ int main(void) {
 	set_date();
 	break;
       case (SET_DATE):
-	displaymode = SET_BRIGHTNESS;
-	display_str("set brit");
-	set_brightness();
+	//displaymode = SET_BRIGHTNESS;
+	//display_str("set brit");
+	//set_brightness();
+        displaymode = SET_ZONE;
+        display_str("set zone");
+        set_timezone();
 	break;
+      case (SET_ZONE):
+        displaymode = SET_BRIGHTNESS;
+        display_str("set brit");
+        set_brightness();
+        break;
       case (SET_BRIGHTNESS):
 	displaymode = SET_VOLUME;
 	display_str("set vol ");
@@ -671,7 +655,14 @@ int main(void) {
       kickthedog();
 
       displaymode = SHOW_TIME;     
-    } 
+    }
+
+    //Check to see if GPS data is ready:
+    if ( gpsdataready() ) {
+       getgpstime();
+
+    }
+ 
   }
 }
 
@@ -943,6 +934,72 @@ void set_date(void) {
   }
 }
 
+//Function to set the time zone
+void set_timezone(void) {
+  int8_t hour = intTimeZoneHour;
+  uint8_t min = intTimeZoneMin;
+  uint8_t mode = SHOW_MENU;
+  timeoutcounter = INACTIVITYTIMEOUT;
+
+  while (1) {
+    if (just_pressed & 0x1) { // mode change
+      return;
+    }
+    if (just_pressed || pressed) {
+      timeoutcounter = INACTIVITYTIMEOUT;  
+      // timeout w/no buttons pressed after 3 seconds?
+    } else if (!timeoutcounter) {
+      //timed out!
+      displaymode = SHOW_TIME;     
+      return;
+    }
+    if (just_pressed & 0x2) {
+      just_pressed = 0;
+      if (mode == SHOW_MENU) {
+	// ok now its selected
+	mode = SET_HOUR;
+	display_timezone(hour, min);
+	display[1] |= 0x1;
+	display[2] |= 0x1;	
+      } else if (mode == SET_HOUR) {
+	mode = SET_MIN;
+	display_timezone(hour, min);
+	display[4] |= 0x1;
+	display[5] |= 0x1;
+      } else {
+	// done!
+	displaymode = SHOW_TIME;
+	return;
+      }
+    }
+    if ((just_pressed & 0x4) || (pressed & 0x4)) {
+      just_pressed = 0;
+      
+      if (mode == SET_HOUR) {
+	hour = ( ( hour + 1 + 12 ) % 25 ) - 12;
+	display_timezone(hour, min);
+	display[1] |= 0x1;
+	display[2] |= 0x1;
+        intTimeZoneHour = hour;
+	eeprom_write_byte((uint8_t *)EE_ZONE_HOUR, hour);
+	//Debugging:
+	uart_puts("\n\rTimezone offset hour:\t");
+	uart_putw_dec(hour);
+      }
+      if (mode == SET_MIN) {
+	min = ( min + 1 ) % 60;
+	display_timezone(hour, min);
+	display[4] |= 0x1;
+	display[5] |= 0x1;
+        intTimeZoneMin = min;
+	eeprom_write_byte((uint8_t *)EE_ZONE_MIN, min);
+      }
+      
+      if (pressed & 0x4)
+	delayms(75);
+    }
+  }
+}
 
 void set_brightness(void) {
   uint8_t mode = SHOW_MENU;
@@ -1548,6 +1605,24 @@ void display_alarm(uint8_t h, uint8_t m){
   }
 }
 
+// Kinda like display_time but just hours and minutes allows negative hours.
+void display_timezone(int8_t h, uint8_t m){ 
+  display[8] = pgm_read_byte(alphatable_p + 'c' - 'a');
+  display[7] = pgm_read_byte(alphatable_p + 't' - 'a');
+  display[6] = pgm_read_byte(alphatable_p + 'u' - 'a');
+  display[5] = pgm_read_byte(numbertable_p + (m % 10));
+  display[4] = pgm_read_byte(numbertable_p + (m / 10)); 
+  display[3] = 0;
+  display[2] = pgm_read_byte(numbertable_p + (abs(h) % 10));
+  display[1] = pgm_read_byte(numbertable_p + (abs(h) / 10));
+  // We use the '-' as a negative sign
+  if (h >= 0)
+    display[0] &= ~0x2;  // positive numbers, implicit sign
+  else 
+    display[0] |= 0x2;  // negative numbers, display negative sign
+
+}
+
 // display words (menus, prompts, etc)
 void display_str(char *s) {
   uint8_t i;
@@ -1625,3 +1700,345 @@ void spi_xfer(uint8_t c) {
   while (! (SPSR & _BV(SPIF)));
 }
 
+//GPS serial data handling functions:
+
+//Check to see if there is any serial data.
+uint8_t gpsdataready(void) {
+
+  return (UCSR0A & _BV(RXC0));
+
+}
+
+
+void getgpstime(void) {
+
+  uint8_t intOldHr = 0;
+  uint8_t intOldMin = 0;
+  uint8_t intOldSec = 0;
+
+  char charReceived = UDR0;
+
+  char *strPointer1;
+  char strTime[7];
+  char strDate[7];
+  
+  //If the buffer has not been started because a '$' has not been encountered
+  //but a '$' is just now encountered, then start filling the buffer.
+  if ( ( 0 == intBufferStatus ) && ( '$' == charReceived ) ) {
+    intBufferStatus = 1;
+    strncat(strBuffer, &charReceived, 1);
+    return;
+  }
+
+  //If the buffer has started to fill...
+  if ( 0 != intBufferStatus ) {
+    //If for some reason, the buffer is full, clear it, and start over.
+    if ( ! ( ( strlen(strBuffer) < BUFFERSIZE ) ) ) {
+      memset( strBuffer, 0, BUFFERSIZE );
+      intBufferStatus = 0;
+      return;
+    }
+    //If the buffer has 6 characters in it, it is time to check to see if it is 
+    //the line we are looking for that starts with "$GPRMC"
+    else if ( 6 == strlen(strBuffer) ) {
+      //If the buffer does contain the characters we are looking for,
+      //then update the status, add to the buffer, and then return for more.
+      if ( 0 == strcmp( strBuffer, "$GPRMC" ) ) {
+        //uart_puts("\n\r$GPRMC Found \n\r");
+        intBufferStatus = 2;
+        strncat(strBuffer, &charReceived, 1);
+        return;
+      }
+      //If the buffer does not contain the characters we are looking for,
+      //then clear the buffer and start over..
+      else {
+        //uart_puts("\n\r$GPRMC Not Found:\t\t");
+        //uart_puts(strBuffer);
+        memset( strBuffer, 0, BUFFERSIZE );
+        intBufferStatus = 0;
+        return;
+      }
+    }
+
+    //If the asterix at the start of the checksum at the end of the line is encountered,
+    //then parse the buffer.
+    else if ( '*' == charReceived ) {
+      //If the buffer status indicates we have not already found the
+      //needed start of the string, then start over.
+      if ( 2 != intBufferStatus ) {
+        memset( strBuffer, 0, BUFFERSIZE );
+        intBufferStatus = 0;
+        return;
+      }
+      //If the buffer status indicates we have already found the needed start of the string,
+      //then go on to parse the buffer.
+      else {
+        //Parse the buffer here...
+        //Let's test to see if this works:
+        uart_puts("\n\r");
+        uart_puts(strBuffer);
+
+        //Find the first comma:
+        strPointer1 = strchr( strBuffer, ',');
+
+        //Copy the section of memory in the buffer that contains the time.
+        memcpy( strTime, strPointer1 + 1, 6 );
+        //add a null character to the end of the time string.
+        strTime[6] = 0;
+
+
+
+        //Find eight more commas to get the date:
+        for ( int i = 0; i < 8; i++ ) {
+          strPointer1 = strchr( strPointer1 + 1, ',');
+        }
+
+        //Copy the section of memory in the buffer that contains the date.
+        memcpy( strDate, strPointer1 + 1, 6 );
+        //add a null character to the end of the date string.
+        strDate[6] = 0;
+
+        //The GPS unit will not have the proper date unless it has received a time update.
+        //NOTE: at the turn of the century, the clock will not get updates from GPS
+        //for as many years as the value of PROGRAMMING_YEAR
+        if ( PROGRAMMING_YEAR <= ( ( (strDate[4] - '0') * 10 ) ) + (strDate[5] - '0') ) {
+          //Get the 'old' values of the time:
+          intOldHr = time_h;
+          intOldMin = time_m;
+          intOldSec = time_s;
+
+          //Change the time:
+          setgpstime(strTime);
+          //Change the date:
+          setgpsdate(strDate);
+
+	  //Gussy up the time and date, make the numbers come out right:
+          fix_time();
+
+          //Turn the two time values into minutes past midnight
+          uint16_t timeMinutes = ((time_h * 60) + (time_m));
+          uint16_t oldTimeMinutes = ((intOldHr * 60) + (intOldMin));
+
+          int8_t intTempHr = time_h;
+          int8_t intTempMin = time_m;
+
+          //If midnight happened between the old time and the new time
+          //and we did not just go back in time...
+          if ( ( 0 > (int16_t)( timeMinutes - oldTimeMinutes ) )
+               && ( (timeMinutes + 1440) >= oldTimeMinutes )
+               && ( abs( timeMinutes + 1440 - oldTimeMinutes ) < abs( timeMinutes - oldTimeMinutes ) ) ) {
+            timeMinutes += 1440;
+            intTempHr += 24;
+          }
+
+          if ( timeMinutes > oldTimeMinutes ) {
+
+            //Count backwards in time to the old time, checking the alarm for each minute.
+            for ( ; intTempHr >= intOldHr; intTempHr-- ) {
+              for ( ; intTempMin >= 0; intTempMin-- ) {
+                check_alarm( (uint8_t)intTempHr, (uint8_t)intTempMin, 0 );
+              }
+              intTempMin = 59;
+            }
+
+          }
+
+        }
+
+        //We've done what we needed to do, so start over.
+        memset( strBuffer, 0, BUFFERSIZE );
+        intBufferStatus = 0;
+        return;
+      }
+    }
+    //If nothing else was found, add to the buffer.
+    else {
+      strncat(strBuffer, &charReceived, 1);
+    }
+
+
+  }
+
+}
+
+//Set the time with a string taken from GPS data:
+void setgpstime(char* str) {
+  uint8_t intTempHr = 0;
+  uint8_t intTempMin = 0;
+  uint8_t intTempSec = 0;
+
+  intTempHr = (str[0] - '0') * 10;
+  intTempHr = intTempHr + (str[1] - '0');
+
+  intTempMin = (str[2] - '0') * 10;
+  intTempMin = intTempMin + (str[3] - '0');
+
+  intTempSec = (str[4] - '0') * 10;
+  intTempSec = intTempSec + (str[5] - '0');
+
+  time_h = intTempHr + intTimeZoneHour;
+
+  //If the time zone offset is negative, then subtract minutes
+  if ( 0 > intTimeZoneHour )
+    time_m = intTempMin - intTimeZoneMin;
+  else
+    time_m = intTempMin + intTimeZoneMin;
+
+  time_s = intTempSec;
+
+}
+
+//Set the date with a string taken from GPS data:
+void setgpsdate(char* str) {
+  uint8_t intTempDay = 0;
+  uint8_t intTempMon = 0;
+  uint8_t intTempYr = 0;
+
+  intTempDay = (str[0] - '0') * 10;
+  intTempDay = intTempDay + (str[1] - '0');
+
+  intTempMon = (str[2] - '0') * 10;
+  intTempMon = intTempMon + (str[3] - '0');
+
+  intTempYr = (str[4] - '0') * 10;
+  intTempYr = intTempYr + (str[5] - '0');
+
+  timeunknown = 0;
+  restored = 0;
+
+  date_d = intTempDay;
+  date_m = intTempMon;
+  date_y = intTempYr;
+
+}
+
+//Checks the alarm against the passed time.
+void check_alarm(uint8_t h, uint8_t m, uint8_t s) {
+
+  if (alarm_on && (alarm_h == h) && (alarm_m == m) && (0 == s)) {
+    DEBUGP("alarm on!");
+    alarming = 1;
+    snoozetimer = 0;
+  }
+
+}
+
+
+//Fixes the time variables whenever time is changed
+void fix_time(void) {
+
+  // a minute!
+  if (time_s >= 60) {
+    time_s = time_s - 60;
+    time_m++;
+  }
+  // If someone decides to make offset seconds with a negative number...
+  if (time_s < 0) {
+    time_s =  60 + time_s;
+    time_m--;
+  }
+
+  // an hour...
+  if (time_m >= 60) {
+    time_m = time_m - 60;
+    time_h++; 
+    // let's write the time to the EEPROM
+    eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
+    eeprom_write_byte((uint8_t *)EE_MIN, time_m);
+  }
+  // When offsets create negative minutes...
+  if (time_m < 0) {
+    time_m = 60 + time_m;
+    time_h--; 
+    eeprom_write_byte((uint8_t *)EE_HOUR, time_h);
+    eeprom_write_byte((uint8_t *)EE_MIN, time_m);
+  }
+
+  // a day....
+  if (time_h >= 24) {
+    time_h = time_h - 24;
+    date_d++;
+    eeprom_write_byte((uint8_t *)EE_DAY, date_d);
+  }
+  // When offsets create negative hours...
+  if (time_h < 0) {
+    time_h = 24 + time_h;
+    date_d--;
+    eeprom_write_byte((uint8_t *)EE_DAY, date_d);
+  }
+  
+  //if (! sleepmode) {
+  //  uart_putw_dec(time_h);
+  //  uart_putchar(':');
+  //  uart_putw_dec(time_m);
+  //  uart_putchar(':');
+  //  uart_putw_dec(time_s);
+  //  putstring_nl("");
+  //}
+  
+
+  // a full month!
+  // we check the leapyear and date to verify when it's time to roll over months
+  if ((date_d > 31) ||
+      ((date_d == 31) && ((date_m == 4)||(date_m == 6)||(date_m == 9)||(date_m == 11))) ||
+      ((date_d == 30) && (date_m == 2)) ||
+      ((date_d == 29) && (date_m == 2) && !leapyear(2000+date_y))) {
+    date_d = 1;
+    date_m++;
+    eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
+  }
+  // When offsets create negative days...
+  if (date_d < 1) {
+    //Find which month we are going back to:
+    switch (date_m) {
+      case 1: //January -> December
+      case 2: //February -> January
+      case 4: //April -> March
+      case 6: //June -> May
+      case 8: //August -> July
+      case 9: //September -> August
+      case 11: //November -> October
+        date_d = 31 + date_d;
+        date_m--;
+        break;
+
+      case 5: //May -> April
+      case 7: //July -> June
+      case 10: //October -> September
+      case 12: //December -> November
+        date_d = 30 + date_d;
+        date_m--;
+        break;
+
+      case 3: //March -> February, the fun case
+        //If we are in a leapyear, February is 29 days long...
+        if ( leapyear(2000+date_y) )
+          date_d = 29 + date_d;
+        else //otherwise, it is 28 days long...
+          date_d = 28 + date_d;
+        date_m--;
+        break;
+      default:
+        date_d = 1;
+        break;
+    }
+
+    eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
+  }
+  
+  // HAPPY NEW YEAR!
+  if (date_m >= 13) {
+    date_y++;
+    date_m = 1;
+    eeprom_write_byte((uint8_t *)EE_YEAR, date_y);
+  }
+  //This takes away the years and is cheaper than any cream you can buy...
+  if (date_m < 1) {
+    date_m = 12 + date_m;
+    date_y--;
+    eeprom_write_byte((uint8_t *)EE_MONTH, date_m);
+    eeprom_write_byte((uint8_t *)EE_YEAR, date_y);
+  }
+
+
+}
