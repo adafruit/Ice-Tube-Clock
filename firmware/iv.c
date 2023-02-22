@@ -77,7 +77,7 @@ uint8_t currdigit = 0;        // which digit we are currently multiplexing
 const uint8_t digittable[] PROGMEM = {
   DIG_9, DIG_8, DIG_7, DIG_6, DIG_5, DIG_4, DIG_3, DIG_2, DIG_1
 };
-PGM_P digittable_p PROGMEM = digittable;
+PGM_P const digittable_p PROGMEM = digittable;
 
 // This table allow us to index between what segment we want to light up
 // and what the pin number is on the MAX6921 see the .h for values.
@@ -85,7 +85,7 @@ PGM_P digittable_p PROGMEM = digittable;
 const uint8_t segmenttable[] PROGMEM = {
   SEG_H, SEG_G,  SEG_F,  SEG_E,  SEG_D,  SEG_C,  SEG_B,  SEG_A 
 };
-PGM_P segmenttable_p PROGMEM = segmenttable;
+PGM_P const segmenttable_p PROGMEM = segmenttable;
 
 // muxdiv and MUX_DIVIDER divides down a high speed interrupt (31.25KHz)
 // down so that we can refresh at about 100Hz (31.25KHz / 300)
