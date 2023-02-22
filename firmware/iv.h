@@ -22,30 +22,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ****************************************************************************/
 
-
-#define halt(x)  while (1)
+#define halt(x) while (1)
 
 #define DEBUG 1
-#define DEBUGP(x)  if (DEBUG) {putstring_nl(x);}
+#define DEBUGP(x)        \
+    if (DEBUG)           \
+    {                    \
+        putstring_nl(x); \
+    }
 
-//The year the clock was programmed, used for error checking
+// The year the clock was programmed, used for error checking
 #define PROGRAMMING_YEAR 10
 
 #define REGION_US 0
 #define REGION_EU 1
 
 // date format
-#define DATE 0  // mm-dd-yy
-#define DAY 1   // thur jan 1
+#define DATE 0 // mm-dd-yy
+#define DAY 1  // thur jan 1
 
 // String buffer size:
 #define BUFFERSIZE 128
 
 #define DISPLAYSIZE 9
 
-#define MAXSNOOZE 600 // 10 minutes
+#define MAXSNOOZE 600        // 10 minutes
 #define INACTIVITYTIMEOUT 10 // how many seconds we will wait before turning off menus
-
 
 #define BEEP_8KHZ 5
 #define BEEP_4KHZ 10
@@ -58,7 +60,7 @@ THE SOFTWARE.
 #define EE_HOUR 4
 #define EE_MIN 5
 #define EE_SEC 6
-#define EE_ALARM_HOUR 7 
+#define EE_ALARM_HOUR 7
 #define EE_ALARM_MIN 8
 #define EE_BRIGHT 9
 #define EE_VOLUME 10
@@ -91,13 +93,13 @@ void set_volume(void);
 void set_region(void);
 void set_snooze(void); // not activated by default
 
-//Checks the alarm against the passed time.
+// Checks the alarm against the passed time.
 void check_alarm(uint8_t h, uint8_t m, uint8_t s);
 
-//Fixes the time variables whenever time is changed
+// Fixes the time variables whenever time is changed
 void fix_time(void);
 
-//Set the time zone:
+// Set the time zone:
 void set_timezone(void);
 
 void beep(uint16_t freq, uint8_t times);
@@ -110,12 +112,16 @@ void setdisplay(uint8_t digit, uint8_t segments);
 void vfd_send(uint32_t d);
 void spi_xfer(uint8_t c);
 
-//GPS serial data handling functions:
+// GPS serial data handling functions:
 uint8_t gpsdataready(void);
 void getgpstime(void);
-void setgpstime(char* str);
-void setgpsdate(char* str);
+void setgpstime(char *str);
+void setgpsdate(char *str);
 
+// Hourly checks:
+#define WORKDAY_START 7
+void check_hourly_beep(void);
+void auto_brightness(void);
 
 // displaymode
 #define NONE 99
@@ -142,13 +148,12 @@ void setgpsdate(char* str);
 #define SET_MONTH 1
 #define SET_DAY 2
 #define SET_YEAR 3
-//brightness
+// brightness
 #define SET_BRITE 1
-//volume
+// volume
 #define SET_VOL 1
-//region
+// region
 #define SET_REG 1
-
 
 #define BOOST PD6
 #define BOOST_DDR DDRD
